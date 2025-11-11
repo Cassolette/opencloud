@@ -24,11 +24,10 @@ dev-docker-multiarch:
 	@echo "+-------------------------------------------------------------------------+"
 	@echo "| Are you sure you have run make node-generate-prod in the repository root? |"
 	@echo "+-------------------------------------------------------------------------+"
-	sleep 10
 	docker buildx rm opencloudbuilder || true
 	docker buildx create --platform linux/arm64,linux/amd64 --name opencloudbuilder
 	docker buildx use opencloudbuilder
-	docker buildx build --platform linux/arm64,linux/amd64 --output type=docker --file docker/Dockerfile.multiarch --tag opencloudeu/opencloud:dev-multiarch ../..
+	docker buildx build --platform linux/arm64,linux/amd64 --output type=registry --file docker/Dockerfile.multiarch --tag opencloudeu/opencloud:dev-multiarch ../..
 	docker buildx rm opencloudbuilder
 
 .PHONY: debug-docker
