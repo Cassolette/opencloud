@@ -28,5 +28,8 @@ var (
 		"application/vnd.geogebra.pinboard": {},
 		"image/webp":                        {},
 		"image/jxl":                         {},
+		"image/heic":                        {},
+		"image/heif":                        {},
+		"image/avif":                        {},
 	}
 )
