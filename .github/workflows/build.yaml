@@ -200,7 +200,6 @@ jobs:
           TAG: ${{ needs.calculate-env.outputs.TAG }}
         run: |
           # Create the :latest manifest based on the $TAG manifest
-          docker manifest create $IMAGE:latest \
-            --amend $IMAGE:$TAG
+          docker manifest create $IMAGE:latest $IMAGE:$TAG
           
           docker manifest push $IMAGE:latest

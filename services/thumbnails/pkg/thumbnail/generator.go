@@ -89,7 +89,7 @@ func (g GifGenerator) imageToPaletted(img image.Image, p color.Palette) *image.P
 // or nil if the type is not supported.
 func GeneratorFor(fileType, processorID string) (Generator, error) {
 	switch strings.ToLower(fileType) {
-	case typePng, typeJpg, typeJpeg, typeGgs, typeGgp, typeWebp, typeHeic:
+	case typePng, typeJpg, typeJpeg, typeGgs, typeGgp, typeWebp, typeHeic, typeHeif, typeAvif:
 		return NewSimpleGenerator(fileType, processorID)
 	case typeGif:
 		return NewGifGenerator(fileType, processorID)
