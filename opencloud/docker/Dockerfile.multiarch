@@ -21,7 +21,7 @@ ARG TARGETARCH
 
 RUN apk add --no-cache attr bash ca-certificates curl imagemagick \
                        inotify-tools libc6-compat mailcap tree vips \
-		       vips-magick vips-jxl patch && \
+		       vips-magick vips-jxl vips-heif patch && \
     echo 'hosts: files dns' >| /etc/nsswitch.conf
 
 LABEL maintainer="openCloud GmbH <devops@opencloud.eu>" \
