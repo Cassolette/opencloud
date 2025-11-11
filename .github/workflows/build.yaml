@@ -21,26 +21,84 @@ permissions:
   packages: write
 
 jobs:
-  build:
+  calculate-env:
     runs-on: ubuntu-latest
+    outputs:
+      IMAGE: ${{ steps.envs.outputs.IMAGE }}
+      TAG: ${{ steps.envs.outputs.TAG }}
+      ADD_LATEST: ${{ steps.envs.outputs.ADD_LATEST }}
+    steps:
+      - name: Envs
+        id: envs # Use an ID to capture outputs
+        run: |
+          set -eu
+          DEFAULT_IMAGE="ghcr.io/${GITHUB_REPOSITORY}"
+          
+          # IMAGE calculation
+          IMAGE="${INPUT_IMAGE_NAME:-${DEFAULT_IMAGE}}"
+          IMAGE="${IMAGE,,}" # Make it lowercase
+
+          # TAG calculation
+          TAG_VALUE=""
+          FROM_TAG=false
+          if [ -n "${INPUT_IMAGE_TAG:-}" ]; then
+              TAG_VALUE="${INPUT_IMAGE_TAG}"
+              FROM_TAG=true
+          elif [[ "${GITHUB_REF:-}" =~ ^refs/tags/ ]]; then
+              TAG_VALUE="${GITHUB_REF#refs/tags/}"
+              TAG_VALUE="${TAG_VALUE#rel/}" # strip rel/ prefix
+              FROM_TAG=true
+          else
+              TAG_VALUE="${GITHUB_SHA:0:7}"
+              FROM_TAG=false
+          fi
+
+          # LATEST calculation
+          ADD_LATEST="false" # Default to false
+          # Only consider adding :latest if we are running from a specific TAG (not SHA)
+          if [ "${FROM_TAG}" = "true" ]; then
+              # Check workflow_dispatch input, defaulting to 'true' if unset
+              if [ "${INPUT_ADD_LATEST:-true}" = "true" ]; then
+                  ADD_LATEST="true"
+              fi
+          fi
+
+          echo "IMAGE=${IMAGE}" >> $GITHUB_OUTPUT
+          echo "TAG=${TAG_VALUE}" >> $GITHUB_OUTPUT
+          echo "ADD_LATEST=${ADD_LATEST}" >> $GITHUB_OUTPUT
+          echo "Computed IMAGE=${IMAGE}"
+          echo "Computed TAG=${TAG_VALUE}"
+          echo "Computed ADD_LATEST=${ADD_LATEST}"
+
+  build-amd64:
+    runs-on: ubuntu-24.04
+    name: Build amd64 image
+    needs:
+      - calculate-env
+    outputs:
+      IMAGE: ${{ needs.calculate-env.outputs.IMAGE }}
+      TAG: ${{ needs.calculate-env.outputs.TAG }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 10
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
-
-      - name: Cache Go build and module directories
-        uses: actions/cache@v3
+      - name: Cache Go modules
+        uses: actions/cache@v4
         with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
+          path: ~/go/pkg/mod
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-
+
+      - name: Cache Go build (arch specific)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: ${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-${{ github.job }}-
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v2
@@ -49,56 +107,100 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Determine image name and tags
-        id: vars
+      - name: Build amd64 image
         run: |
-          set -eu
-          DEFAULT_IMAGE="ghcr.io/${GITHUB_REPOSITORY}"
-          # INPUT_* variables are provided for workflow_dispatch cust inputs
-          if [ -n "${INPUT_IMAGE_NAME:-}" ]; then
-              IMAGE="${INPUT_IMAGE_NAME}"
-          else
-              IMAGE="${DEFAULT_IMAGE}"
-          fi
+          make -C opencloud/ dev-docker
 
-          # Make it lowercase
-          IMAGE="${IMAGE,,}"
-
-          # Determine tag: priority - workflow input image_tag, push tag, fallback to short SHA
-          if [ -n "${INPUT_IMAGE_TAG:-}" ]; then
-              TAG="${INPUT_IMAGE_TAG}"
-              FROM_TAG=true
-          elif [[ "${GITHUB_REF:-}" =~ ^refs/tags/ ]]; then
-              TAG="${GITHUB_REF#refs/tags/}"
-              # strip rel/ prefix if present
-              TAG="${TAG#rel/}"
-              FROM_TAG=true
-          else
-              TAG="${GITHUB_SHA:0:7}"
-              FROM_TAG=false
-          fi
-
-          # Compose tags to pass to buildx. If from a release tag and add_latest=true, also add latest
-          TAGS="${IMAGE}:${TAG}"
-          if [ "${FROM_TAG}" = "true" ] && [ "${INPUT_ADD_LATEST:-true}" != "false" ]; then
-              TAGS="${TAGS},${IMAGE}:latest"
-          fi
-
-          echo "IMAGE=${IMAGE}" >> $GITHUB_ENV
-          echo "TAG=${TAG}" >> $GITHUB_ENV
-          echo "TAGS=${TAGS}" >> $GITHUB_ENV
-          echo "Computed IMAGE=${IMAGE}"
-          echo "Computed TAG=${TAG}"
-          echo -e "Computed TAGS:\n${TAGS}"
-
-      - name: Build multi-arch image using Makefile
-        run: |
-          make -C opencloud/ dev-docker-multiarch
-
-      - name: Push image to GHCR
+      - name: Push amd64 image to GHCR
         env:
-          IMAGE: ${{ env.IMAGE }}
-          TAG: ${{ env.TAG }}
+          IMAGE: ${{ needs.calculate-env.outputs.IMAGE }}
+          TAG: ${{ needs.calculate-env.outputs.TAG }}
         run: |
-          docker tag opencloudeu/opencloud:dev-multiarch $IMAGE:$TAG
-          docker push $IMAGE:$TAG
+          docker tag opencloudeu/opencloud:dev $IMAGE:$TAG-amd64
+          docker push $IMAGE:$TAG-amd64
+
+  build-arm64:
+    runs-on: ubuntu-24.04-arm
+    name: Build arm64 image
+    needs:
+      - calculate-env
+    outputs:
+      IMAGE: ${{ needs.calculate-env.outputs.IMAGE }}
+      TAG: ${{ needs.calculate-env.outputs.TAG }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 10
+      
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Cache Go build (arch specific)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: ${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-${{ github.job }}-
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build arm64 image
+        run: |
+          make -C opencloud/ dev-docker
+
+      - name: Push arm64 image to GHCR
+        env:
+          IMAGE: ${{ needs.calculate-env.outputs.IMAGE }}
+          TAG: ${{ needs.calculate-env.outputs.TAG }}
+        run: |
+          docker tag opencloudeu/opencloud:dev $IMAGE:$TAG-arm64
+          docker push $IMAGE:$TAG-arm64
+
+  create-manifest:
+    runs-on: ubuntu-latest
+    needs:
+      - calculate-env
+      - build-amd64
+      - build-arm64
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push multi-arch manifest
+        env:
+          IMAGE: ${{ needs.calculate-env.outputs.IMAGE }}
+          TAG: ${{ needs.calculate-env.outputs.TAG }}
+        run: |
+          docker manifest create $IMAGE:$TAG \
+            --amend $IMAGE:$TAG-amd64 \
+            --amend $IMAGE:$TAG-arm64
+
+          docker manifest push $IMAGE:$TAG
+
+      - name: Push :latest
+        if: ${{ needs.calculate-env.outputs.ADD_LATEST == 'true' }}
+        env:
+          IMAGE: ${{ needs.calculate-env.outputs.IMAGE }}
+          TAG: ${{ needs.calculate-env.outputs.TAG }}
+        run: |
+          # Create the :latest manifest based on the $TAG manifest
+          docker manifest create $IMAGE:latest \
+            --amend $IMAGE:$TAG
+          
+          docker manifest push $IMAGE:latest
