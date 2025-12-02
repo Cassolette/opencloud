@@ -27,13 +27,18 @@ jobs:
       IMAGE: ${{ steps.envs.outputs.IMAGE }}
       TAG: ${{ steps.envs.outputs.TAG }}
       ADD_LATEST: ${{ steps.envs.outputs.ADD_LATEST }}
+      SIMPLIFIED_TAG: ${{ steps.envs.outputs.SIMPLIFIED_TAG }}
     steps:
       - name: Envs
         id: envs # Use an ID to capture outputs
+        env:
+          INPUT_IMAGE_NAME: ${{ github.event.inputs.image_name }}
+          INPUT_IMAGE_TAG: ${{ github.event.inputs.image_tag }}
+          INPUT_ADD_LATEST: ${{ github.event.inputs.add_latest }}
         run: |
           set -eu
           DEFAULT_IMAGE="ghcr.io/${GITHUB_REPOSITORY}"
-          
+
           # IMAGE calculation
           IMAGE="${INPUT_IMAGE_NAME:-${DEFAULT_IMAGE}}"
           IMAGE="${IMAGE,,}" # Make it lowercase
@@ -63,12 +68,27 @@ jobs:
               fi
           fi
 
+          # SIMPLIFIED_TAG calculation
+          SIMPLIFIED_TAG_VALUE=""
+          # Only calculate simplified tag if we derived a proper TAG_VALUE from a release ref or input
+          if [ "${FROM_TAG}" = "true" ]; then
+              # Extract everything before the first '-'
+              SIMPLIFIED_TAG_VALUE="${TAG_VALUE%%-*}"
+              if [ "${SIMPLIFIED_TAG_VALUE}" = "${TAG_VALUE}" ]; then
+                # If identical to actual tag, just keep this env blank
+                SIMPLIFIED_TAG_VALUE=""
+              fi
+          fi
+
           echo "IMAGE=${IMAGE}" >> $GITHUB_OUTPUT
           echo "TAG=${TAG_VALUE}" >> $GITHUB_OUTPUT
           echo "ADD_LATEST=${ADD_LATEST}" >> $GITHUB_OUTPUT
+          echo "SIMPLIFIED_TAG=${SIMPLIFIED_TAG_VALUE}" >> $GITHUB_OUTPUT
+
           echo "Computed IMAGE=${IMAGE}"
           echo "Computed TAG=${TAG_VALUE}"
           echo "Computed ADD_LATEST=${ADD_LATEST}"
+          echo "Computed SIMPLIFIED_TAG=${SIMPLIFIED_TAG_VALUE}"
 
   build-amd64:
     runs-on: ubuntu-24.04
@@ -133,7 +153,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 10
-      
+
       - name: Cache Go modules
         uses: actions/cache@v4
         with:
@@ -203,3 +223,14 @@ jobs:
         run: |
           # Create the :latest manifest based on the $TAG manifest
           docker buildx imagetools create -t $IMAGE:latest $IMAGE:$TAG
+
+      - name: Push simplified tag
+        if: ${{ needs.calculate-env.outputs.SIMPLIFIED_TAG != '' }}
+        env:
+          IMAGE: ${{ needs.calculate-env.outputs.IMAGE }}
+          SIMPLIFIED_TAG: ${{ needs.calculate-env.outputs.SIMPLIFIED_TAG }}
+          TAG: ${{ needs.calculate-env.outputs.TAG }}
+        run: |
+          echo "Creating and pushing simplified manifest: $IMAGE:$SIMPLIFIED_TAG"
+          # Create the $SIMPLIFIED_TAG manifest based on the $TAG manifest
+          docker buildx imagetools create -t $IMAGE:$SIMPLIFIED_TAG $IMAGE:$TAG
