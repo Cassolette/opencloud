@@ -11,10 +11,10 @@ import (
 )
 
 var extraMimes = []string{
+	`"image/jxl"`,
 	`"image/heic"`,
 	`"image/heif"`,
 	`"image/avif"`,
-	`"image/jxl"`,
 }
 
 func main() {
@@ -32,6 +32,7 @@ func main() {
 	if len(matches) == 0 {
 		fatal("No files found matching: %s", pattern)
 	}
+	fmt.Println(">> Extra mimetypes to be patched in: " + strings.Join(extraMimes, " "))
 	for _, f := range matches {
 		fmt.Println(">> Patching: " + f)
 		patchFile(f)
@@ -57,6 +58,8 @@ func patchFile(path string) {
 	if changed {
 		os.WriteFile(path, out, 0644)
 		fmt.Println("patched", path)
+	} else {
+		fmt.Println("already patched. skipped.")
 	}
 }
 
@@ -82,6 +85,8 @@ func patchGzip(path string) {
 		w.Close()
 		os.WriteFile(path, buf.Bytes(), 0644)
 		fmt.Println("patched", path)
+	} else {
+		fmt.Println("already patched. skipped.")
 	}
 }
 
