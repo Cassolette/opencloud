@@ -13,10 +13,10 @@ include ../../.make/release.mk
 include ../../.make/docs.mk
 
 .PHONY: node-generate-dev
-node-generate-dev: pull-assets
+node-generate-dev: pull-assets patch-mimes
 
 .PHONY: node-generate-prod
-node-generate-prod: download-assets
+node-generate-prod: download-assets patch-mimes
 
 
 .PHONY: pull-assets
@@ -38,6 +38,7 @@ pull-assets:
 	mkdir -p ../../third-party-licenses/node/web
 	tar xfv tmp/assets/core/origin/release/third-party-licenses.tar.gz -C ../../third-party-licenses/node/web/
 
+
 .PHONY: download-assets
 download-assets:
 	git clean -xfd assets
@@ -47,3 +48,8 @@ download-assets:
 ci-node-save-licenses:
 	@mkdir -p ../../third-party-licenses/node/web
 	@curl --fail -slL -o- https://github.com/opencloud-eu/web/releases/download/$(WEB_ASSETS_VERSION)/third-party-licenses.tar.gz | tar xzf - -C ../../third-party-licenses/node/web
+
+.PHONY: patch-mimes
+patch-mimes:
+	@echo "Patching web-app-preview with extra mime types..."
+	go run scripts/patchweb.go assets/core/js
