@@ -16,6 +16,7 @@ const (
 	typeGgs  = "ggs"
 	typeGgp  = "ggp"
 	typeWebp = "webp"
+	typeJxl  = "jxl"
 	typeHeic = "heic"
 	typeHeif = "heif"
 	typeAvif = "avif"
@@ -59,7 +60,7 @@ func EncoderForType(fileType string) (Encoder, error) {
 	switch strings.ToLower(fileType) {
 	case typePng, typeGgs, typeGgp:
 		return PngEncoder{}, nil
-	case typeJpg, typeJpeg, typeWebp, typeHeic, typeHeif, typeAvif:
+	case typeJpg, typeJpeg, typeWebp, typeJxl, typeHeic, typeHeif, typeAvif:
 		return JpegEncoder{}, nil
 	case typeGif:
 		return GifEncoder{}, nil
@@ -72,7 +73,7 @@ func EncoderForType(fileType string) (Encoder, error) {
 func GetExtForMime(fileType string) string {
 	ext := strings.TrimPrefix(strings.TrimSpace(strings.ToLower(fileType)), "image/")
 	switch ext {
-	case typeJpg, typeJpeg, typePng, typeGif, typeWebp, typeHeic, typeHeif, typeAvif:
+	case typeJpg, typeJpeg, typePng, typeGif, typeWebp, typeJxl, typeHeic, typeHeif, typeAvif:
 		return ext
 	case "application/vnd.geogebra.slides":
 		return typeGgs
