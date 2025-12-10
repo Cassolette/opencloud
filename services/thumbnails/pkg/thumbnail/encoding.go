@@ -16,6 +16,7 @@ const (
 	typeGgs  = "ggs"
 	typeGgp  = "ggp"
 	typeWebp = "webp"
+	typeJxl  = "jxl"
 )
 
 // Encoder encodes the thumbnail to a specific format.
@@ -56,7 +57,7 @@ func EncoderForType(fileType string) (Encoder, error) {
 	switch strings.ToLower(fileType) {
 	case typePng, typeGgs, typeGgp:
 		return PngEncoder{}, nil
-	case typeJpg, typeJpeg, typeWebp:
+	case typeJpg, typeJpeg, typeWebp, typeJxl:
 		return JpegEncoder{}, nil
 	case typeGif:
 		return GifEncoder{}, nil
@@ -69,7 +70,7 @@ func EncoderForType(fileType string) (Encoder, error) {
 func GetExtForMime(fileType string) string {
 	ext := strings.TrimPrefix(strings.TrimSpace(strings.ToLower(fileType)), "image/")
 	switch ext {
-	case typeJpg, typeJpeg, typePng, typeGif, typeWebp:
+	case typeJpg, typeJpeg, typePng, typeGif, typeWebp, typeJxl:
 		return ext
 	case "application/vnd.geogebra.slides":
 		return typeGgs
