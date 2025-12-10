@@ -27,5 +27,6 @@ var (
 		"application/vnd.geogebra.slides":   {},
 		"application/vnd.geogebra.pinboard": {},
 		"image/webp":                        {},
+		"image/jxl":                         {},
 	}
 )
