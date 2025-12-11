@@ -7,14 +7,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
-var extraMimes = []string{
-	`"image/jxl"`,
-	`"image/heic"`,
-	`"image/heif"`,
-	`"image/avif"`,
+var extraMimes = [][]byte{
+	[]byte(`"image/jxl"`),
+	[]byte(`"image/heic"`),
+	[]byte(`"image/heif"`),
+	[]byte(`"image/avif"`),
 }
 
 func main() {
@@ -32,7 +31,7 @@ func main() {
 	if len(matches) == 0 {
 		fatal("No files found matching: %s", pattern)
 	}
-	fmt.Println(">> Extra mimetypes to be patched in: " + strings.Join(extraMimes, " "))
+	fmt.Println(">> Extra mimetypes to be patched in: " + string(bytes.Join(extraMimes, []byte(" "))))
 	for _, f := range matches {
 		fmt.Println(">> Patching: " + f)
 		patchFile(f)
@@ -51,8 +50,7 @@ func main() {
 func patchFile(path string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		fmt.Println("read err", err)
-		return
+		fatal("read err %s", err)
 	}
 	out, changed := patch(data)
 	if changed {
@@ -66,13 +64,11 @@ func patchFile(path string) {
 func patchGzip(path string) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		fmt.Println("read gz err", err)
-		return
+		fatal("read gz err %s", err)
 	}
 	r, err := gzip.NewReader(bytes.NewReader(raw))
 	if err != nil {
-		fmt.Println("gz open err", err)
-		return
+		fatal("read gz err %s", err)
 	}
 	data, _ := io.ReadAll(r)
 	r.Close()
@@ -91,42 +87,49 @@ func patchGzip(path string) {
 }
 
 func patch(data []byte) ([]byte, bool) {
-	s := string(data)
-
-	idx := strings.Index(s, `"image/jpeg"`)
+	anchor := []byte(`"image/jpeg"`)
+	idx := bytes.Index(data, anchor)
 	if idx < 0 {
 		return data, false
 	}
 
 	// find start of the array by scanning backwards for [
-	start := strings.LastIndex(s[:idx], "[")
+	start := bytes.LastIndexByte(data[:idx], '[')
 	if start < 0 {
 		return data, false
 	}
 
 	// find end of the array by scanning forward for ]
-	end := strings.Index(s[idx:], "]")
-	if end < 0 {
+	endRel := bytes.IndexByte(data[idx:], ']')
+	if endRel < 0 {
 		return data, false
 	}
-	end = idx + end
+	end := idx + endRel
 
-	array := s[start : end+1]
+	array := data[start : end+1]
 
-	// avoid duplicates
-	updated := array
+	var mimesToAdd [][]byte
 	for _, m := range extraMimes {
-		if !strings.Contains(updated, m) {
-			updated = updated[:len(updated)-1] + "," + m + "]"
+		// strip duplicates
+		if !bytes.Contains(array, m) {
+			mimesToAdd = append(mimesToAdd, m)
 		}
 	}
-
-	if updated == array {
+	if len(mimesToAdd) == 0 {
 		return data, false
 	}
 
-	result := s[:start] + updated + s[end+1:]
-	return []byte(result), true
+	sep := []byte{','}
+	payloadToInject := append(sep, bytes.Join(mimesToAdd, sep)...)
+
+	// construct [start...beforeEnd] + payload + [end...]
+	var buf bytes.Buffer
+	buf.Grow(len(data) + len(payloadToInject))
+	buf.Write(data[:end])
+	buf.Write(payloadToInject)
+	buf.Write(data[end:])
+
+	return buf.Bytes(), true
 }
 
 func fatal(format string, v ...interface{}) {
