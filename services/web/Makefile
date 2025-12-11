@@ -38,7 +38,6 @@ pull-assets:
 	mkdir -p ../../third-party-licenses/node/web
 	tar xfv tmp/assets/core/origin/release/third-party-licenses.tar.gz -C ../../third-party-licenses/node/web/
 
-
 .PHONY: download-assets
 download-assets:
 	git clean -xfd assets
