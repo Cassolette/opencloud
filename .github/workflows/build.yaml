@@ -1,0 +1,259 @@
+name: Build and push multi-arch image
+
+on:
+  push:
+    tags: [ "rel/**" ]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Custom release tag to use (format: rel/OC_VERSION/FORK_IMAGE_VERSION)'
+        required: false
+      add_latest:
+        description: 'Whether to also add :latest when building from tag (true|false)'
+        required: false
+        default: 'true'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  calculate-env:
+    runs-on: ubuntu-latest
+    outputs:
+      IMAGE: ${{ steps.envs.outputs.IMAGE }}
+      OC_VERSION: ${{ steps.envs.outputs.OC_VERSION }}
+      TAG: ${{ steps.envs.outputs.TAG }}
+      ADD_LATEST: ${{ steps.envs.outputs.ADD_LATEST }}
+    steps:
+      - name: Envs
+        id: envs # Use an ID to capture outputs
+        env:
+          INPUT_RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+          INPUT_ADD_LATEST: ${{ github.event.inputs.add_latest }}
+        run: |
+          set -eu
+
+          # IMAGE calculation
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY}"
+          IMAGE="${IMAGE,,}" # Make it lowercase
+
+          # TAG & OC_VERSION calculation
+          RAW_TAG=""
+          TAG_VALUE=""
+          OC_VERSION=""
+          FROM_TAG=false
+
+          if [ -n "${INPUT_RELEASE_TAG:-}" ]; then
+            RAW_TAG="${INPUT_RELEASE_TAG}"
+            FROM_TAG=true
+          elif [[ "${GITHUB_REF:-}" =~ ^refs/tags/ ]]; then
+            RAW_TAG="${GITHUB_REF#refs/tags/}"
+            FROM_TAG=true
+          else
+            RAW_TAG="${GITHUB_SHA:0:7}"
+            FROM_TAG=false
+          fi
+
+          if [ "${FROM_TAG}" = "true" ]; then
+            TRIMMED_TAG="${RAW_TAG#rel/}" # strip "rel/" prefix
+            OC_VERSION="${TRIMMED_TAG%/*}" # everything before the last '/'
+            TAG_VALUE="${OC_VERSION}"
+
+            if [[ "${TRIMMED_TAG}" == *"/"* ]]; then
+              FORK_IMAGE_VERSION="${TRIMMED_TAG##*/}" # everything after the last '/'
+              TAG_VALUE="${OC_VERSION}_${FORK_IMAGE_VERSION}"
+            fi
+          else
+            OC_VERSION=""
+            TAG_VALUE="${RAW_TAG}"
+          fi
+
+          # LATEST calculation
+          ADD_LATEST="false" # Default to false
+          # Only consider adding :latest if we are running from a specific TAG (not SHA)
+          if [ "${FROM_TAG}" = "true" ]; then
+            # Check workflow_dispatch input, defaulting to 'true' if unset
+            if [ "${INPUT_ADD_LATEST:-true}" = "true" ]; then
+              ADD_LATEST="true"
+            fi
+          fi
+
+          echo "IMAGE=${IMAGE}" >> $GITHUB_OUTPUT
+          echo "OC_VERSION=${OC_VERSION}" >> $GITHUB_OUTPUT
+          echo "TAG=${TAG_VALUE}" >> $GITHUB_OUTPUT
+          echo "ADD_LATEST=${ADD_LATEST}" >> $GITHUB_OUTPUT
+
+          echo "Computed IMAGE=${IMAGE}"
+          echo "Computed OC_VERSION=${OC_VERSION}"
+          echo "Computed TAG=${TAG_VALUE}"
+          echo "Computed ADD_LATEST=${ADD_LATEST}"
+
+  build-amd64:
+    runs-on: ubuntu-24.04
+    name: Build amd64 image
+    needs:
+      - calculate-env
+    outputs:
+      IMAGE: ${{ needs.calculate-env.outputs.IMAGE }}
+      TAG: ${{ needs.calculate-env.outputs.TAG }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 10
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Cache Go build (arch specific)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: ${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-${{ github.job }}-
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build amd64 image
+        env:
+          OC_VERSION: ${{ needs.calculate-env.outputs.OC_VERSION }}
+          TAG: ${{ needs.calculate-env.outputs.TAG }}
+        run: |
+          make -C services/web node-generate-prod
+
+          BUILD_ARG_VERSION="--build-arg STRING=$TAG" # for SHA, we use STRING arg
+          if [ -n "${OC_VERSION}" ]; then
+            BUILD_ARG_VERSION="--build-arg VERSION=$OC_VERSION" # for proper version, use VERSION arg
+          fi
+
+          docker build -f opencloud/docker/Dockerfile.multiarch -t opencloudeu/opencloud:dev \
+            --build-arg EDITION=rolling \
+            ${BUILD_ARG_VERSION} \
+            ..
+
+      - name: Push amd64 image to GHCR
+        env:
+          IMAGE: ${{ needs.calculate-env.outputs.IMAGE }}
+          TAG: ${{ needs.calculate-env.outputs.TAG }}
+        run: |
+          docker tag opencloudeu/opencloud:dev $IMAGE:$TAG-amd64
+          docker push $IMAGE:$TAG-amd64
+
+  build-arm64:
+    runs-on: ubuntu-24.04-arm
+    name: Build arm64 image
+    needs:
+      - calculate-env
+    outputs:
+      IMAGE: ${{ needs.calculate-env.outputs.IMAGE }}
+      TAG: ${{ needs.calculate-env.outputs.TAG }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 10
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Cache Go build (arch specific)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: ${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-${{ github.job }}-
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build arm64 image
+        env:
+          OC_VERSION: ${{ needs.calculate-env.outputs.OC_VERSION }}
+          TAG: ${{ needs.calculate-env.outputs.TAG }}
+        run: |
+          make -C services/web node-generate-prod
+
+          BUILD_ARG_VERSION="--build-arg STRING=$TAG" # for SHA, we use STRING arg
+          if [ -n "${OC_VERSION}" ]; then
+            BUILD_ARG_VERSION="--build-arg VERSION=$OC_VERSION" # for proper version, use VERSION arg
+          fi
+
+          docker build -f opencloud/docker/Dockerfile.multiarch -t opencloudeu/opencloud:dev \
+            --build-arg EDITION=rolling \
+            ${BUILD_ARG_VERSION} \
+            ..
+
+      - name: Push arm64 image to GHCR
+        env:
+          IMAGE: ${{ needs.calculate-env.outputs.IMAGE }}
+          TAG: ${{ needs.calculate-env.outputs.TAG }}
+        run: |
+          docker tag opencloudeu/opencloud:dev $IMAGE:$TAG-arm64
+          docker push $IMAGE:$TAG-arm64
+
+  create-manifest:
+    runs-on: ubuntu-latest
+    needs:
+      - calculate-env
+      - build-amd64
+      - build-arm64
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push multi-arch manifest
+        env:
+          IMAGE: ${{ needs.calculate-env.outputs.IMAGE }}
+          TAG: ${{ needs.calculate-env.outputs.TAG }}
+        run: |
+          docker manifest create $IMAGE:$TAG \
+            --amend $IMAGE:$TAG-amd64 \
+            --amend $IMAGE:$TAG-arm64
+
+          docker manifest push $IMAGE:$TAG
+
+      - name: Push :latest
+        if: ${{ needs.calculate-env.outputs.ADD_LATEST == 'true' }}
+        env:
+          IMAGE: ${{ needs.calculate-env.outputs.IMAGE }}
+          TAG: ${{ needs.calculate-env.outputs.TAG }}
+        run: |
+          # Create the :latest manifest based on the $TAG manifest
+          docker buildx imagetools create -t $IMAGE:latest $IMAGE:$TAG
+
+      - name: Push OC tag
+        if: ${{ needs.calculate-env.outputs.OC_VERSION != '' && needs.calculate-env.outputs.OC_VERSION != needs.calculate-env.outputs.TAG }}
+        env:
+          IMAGE: ${{ needs.calculate-env.outputs.IMAGE }}
+          OC_VERSION: ${{ needs.calculate-env.outputs.OC_VERSION }}
+          TAG: ${{ needs.calculate-env.outputs.TAG }}
+        run: |
+          echo "Creating and pushing OC tag manifest: $IMAGE:$OC_VERSION"
+          # Create the $OC_VERSION manifest based on the $TAG manifest
+          docker buildx imagetools create -t $IMAGE:$OC_VERSION $IMAGE:$TAG
