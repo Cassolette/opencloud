@@ -5,11 +5,8 @@ on:
     tags: [ "rel/**" ]
   workflow_dispatch:
     inputs:
-      image_name:
-        description: 'Optional custom image name (ghcr.io/OWNER/REPO)'
-        required: false
-      image_tag:
-        description: 'Optional tag to use (overrides tag derived from release tag)'
+      release_tag:
+        description: 'Custom release tag to use (format: rel/OC_VERSION/FORK_IMAGE_VERSION)'
         required: false
       add_latest:
         description: 'Whether to also add :latest when building from tag (true|false)'
@@ -25,70 +22,72 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       IMAGE: ${{ steps.envs.outputs.IMAGE }}
+      OC_VERSION: ${{ steps.envs.outputs.OC_VERSION }}
       TAG: ${{ steps.envs.outputs.TAG }}
       ADD_LATEST: ${{ steps.envs.outputs.ADD_LATEST }}
-      SIMPLIFIED_TAG: ${{ steps.envs.outputs.SIMPLIFIED_TAG }}
     steps:
       - name: Envs
         id: envs # Use an ID to capture outputs
         env:
-          INPUT_IMAGE_NAME: ${{ github.event.inputs.image_name }}
-          INPUT_IMAGE_TAG: ${{ github.event.inputs.image_tag }}
+          INPUT_RELEASE_TAG: ${{ github.event.inputs.release_tag }}
           INPUT_ADD_LATEST: ${{ github.event.inputs.add_latest }}
         run: |
           set -eu
-          DEFAULT_IMAGE="ghcr.io/${GITHUB_REPOSITORY}"
 
           # IMAGE calculation
-          IMAGE="${INPUT_IMAGE_NAME:-${DEFAULT_IMAGE}}"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY}"
           IMAGE="${IMAGE,,}" # Make it lowercase
 
-          # TAG calculation
+          # TAG & OC_VERSION calculation
+          RAW_TAG=""
           TAG_VALUE=""
+          OC_VERSION=""
           FROM_TAG=false
-          if [ -n "${INPUT_IMAGE_TAG:-}" ]; then
-              TAG_VALUE="${INPUT_IMAGE_TAG}"
-              FROM_TAG=true
+
+          if [ -n "${INPUT_RELEASE_TAG:-}" ]; then
+            RAW_TAG="${INPUT_RELEASE_TAG}"
+            FROM_TAG=true
           elif [[ "${GITHUB_REF:-}" =~ ^refs/tags/ ]]; then
-              TAG_VALUE="${GITHUB_REF#refs/tags/}"
-              TAG_VALUE="${TAG_VALUE#rel/}" # strip rel/ prefix
-              FROM_TAG=true
+            RAW_TAG="${GITHUB_REF#refs/tags/}"
+            FROM_TAG=true
           else
-              TAG_VALUE="${GITHUB_SHA:0:7}"
-              FROM_TAG=false
+            RAW_TAG="${GITHUB_SHA:0:7}"
+            FROM_TAG=false
+          fi
+
+          if [ "${FROM_TAG}" = "true" ]; then
+            TRIMMED_TAG="${RAW_TAG#rel/}" # strip "rel/" prefix
+            OC_VERSION="${TRIMMED_TAG%/*}" # everything before the last '/'
+            TAG_VALUE="${OC_VERSION}"
+
+            if [[ "${TRIMMED_TAG}" == *"/"* ]]; then
+              FORK_IMAGE_VERSION="${TRIMMED_TAG##*/}" # everything after the last '/'
+              TAG_VALUE="${OC_VERSION}_${FORK_IMAGE_VERSION}"
+            fi
+          else
+            OC_VERSION=""
+            TAG_VALUE="${RAW_TAG}"
           fi
 
           # LATEST calculation
           ADD_LATEST="false" # Default to false
           # Only consider adding :latest if we are running from a specific TAG (not SHA)
           if [ "${FROM_TAG}" = "true" ]; then
-              # Check workflow_dispatch input, defaulting to 'true' if unset
-              if [ "${INPUT_ADD_LATEST:-true}" = "true" ]; then
-                  ADD_LATEST="true"
-              fi
-          fi
-
-          # SIMPLIFIED_TAG calculation
-          SIMPLIFIED_TAG_VALUE=""
-          # Only calculate simplified tag if we derived a proper TAG_VALUE from a release ref or input
-          if [ "${FROM_TAG}" = "true" ]; then
-              # Extract everything before the first '-'
-              SIMPLIFIED_TAG_VALUE="${TAG_VALUE%%-*}"
-              if [ "${SIMPLIFIED_TAG_VALUE}" = "${TAG_VALUE}" ]; then
-                # If identical to actual tag, just keep this env blank
-                SIMPLIFIED_TAG_VALUE=""
-              fi
+            # Check workflow_dispatch input, defaulting to 'true' if unset
+            if [ "${INPUT_ADD_LATEST:-true}" = "true" ]; then
+              ADD_LATEST="true"
+            fi
           fi
 
           echo "IMAGE=${IMAGE}" >> $GITHUB_OUTPUT
+          echo "OC_VERSION=${OC_VERSION}" >> $GITHUB_OUTPUT
           echo "TAG=${TAG_VALUE}" >> $GITHUB_OUTPUT
           echo "ADD_LATEST=${ADD_LATEST}" >> $GITHUB_OUTPUT
-          echo "SIMPLIFIED_TAG=${SIMPLIFIED_TAG_VALUE}" >> $GITHUB_OUTPUT
 
           echo "Computed IMAGE=${IMAGE}"
+          echo "Computed OC_VERSION=${OC_VERSION}"
           echo "Computed TAG=${TAG_VALUE}"
           echo "Computed ADD_LATEST=${ADD_LATEST}"
-          echo "Computed SIMPLIFIED_TAG=${SIMPLIFIED_TAG_VALUE}"
 
   build-amd64:
     runs-on: ubuntu-24.04
@@ -128,9 +127,21 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build amd64 image
+        env:
+          OC_VERSION: ${{ needs.calculate-env.outputs.OC_VERSION }}
+          TAG: ${{ needs.calculate-env.outputs.TAG }}
         run: |
           make -C services/web node-generate-prod
-          make -C opencloud/ dev-docker
+
+          BUILD_ARG_VERSION="--build-arg STRING=$TAG" # for SHA, we use STRING arg
+          if [ -n "${OC_VERSION}" ]; then
+            BUILD_ARG_VERSION="--build-arg VERSION=$OC_VERSION" # for proper version, use VERSION arg
+          fi
+
+          docker build -f opencloud/docker/Dockerfile.multiarch -t opencloudeu/opencloud:dev \
+            --build-arg EDITION=rolling \
+            ${BUILD_ARG_VERSION} \
+            ..
 
       - name: Push amd64 image to GHCR
         env:
@@ -180,7 +191,16 @@ jobs:
       - name: Build arm64 image
         run: |
           make -C services/web node-generate-prod
-          make -C opencloud/ dev-docker
+
+          BUILD_ARG_VERSION="--build-arg STRING=$TAG" # for SHA, we use STRING arg
+          if [ -n "${OC_VERSION}" ]; then
+            BUILD_ARG_VERSION="--build-arg VERSION=$OC_VERSION" # for proper version, use VERSION arg
+          fi
+
+          docker build -f opencloud/docker/Dockerfile.multiarch -t opencloudeu/opencloud:dev \
+            --build-arg EDITION=rolling \
+            ${BUILD_ARG_VERSION} \
+            ..
 
       - name: Push arm64 image to GHCR
         env:
@@ -224,13 +244,13 @@ jobs:
           # Create the :latest manifest based on the $TAG manifest
           docker buildx imagetools create -t $IMAGE:latest $IMAGE:$TAG
 
-      - name: Push simplified tag
-        if: ${{ needs.calculate-env.outputs.SIMPLIFIED_TAG != '' }}
+      - name: Push OC tag
+        if: ${{ needs.calculate-env.outputs.OC_VERSION != '' && needs.calculate-env.outputs.OC_VERSION != needs.calculate-env.outputs.TAG }}
         env:
           IMAGE: ${{ needs.calculate-env.outputs.IMAGE }}
-          SIMPLIFIED_TAG: ${{ needs.calculate-env.outputs.SIMPLIFIED_TAG }}
+          OC_VERSION: ${{ needs.calculate-env.outputs.OC_VERSION }}
           TAG: ${{ needs.calculate-env.outputs.TAG }}
         run: |
-          echo "Creating and pushing simplified manifest: $IMAGE:$SIMPLIFIED_TAG"
-          # Create the $SIMPLIFIED_TAG manifest based on the $TAG manifest
-          docker buildx imagetools create -t $IMAGE:$SIMPLIFIED_TAG $IMAGE:$TAG
+          echo "Creating and pushing OC tag manifest: $IMAGE:$OC_VERSION"
+          # Create the $OC_VERSION manifest based on the $TAG manifest
+          docker buildx imagetools create -t $IMAGE:$OC_VERSION $IMAGE:$TAG
