@@ -523,6 +523,7 @@ def main(ctx):
         testPipelines(ctx)
 
     build_release_pipelines = \
+        checkVersionPlaceholder() + \
         dockerReleases(ctx) + \
         binaryReleases(ctx)
 
@@ -1817,6 +1818,27 @@ def dockerReleases(ctx):
 
     return pipelines
 
+def checkVersionPlaceholder():
+    return [{
+        "name": "check-version-placeholder",
+        "steps": [
+            {
+                "name": "check-version-placeholder",
+                "image": OC_CI_ALPINE,
+                "commands": [
+                    "grep -r -e '%%NEXT%%' -e '%%NEXT_PRODUCTION_VERSION%%' %s/services %s/pkg > next_version.txt" % (
+                        dirs["base"],
+                        dirs["base"],
+                    ),
+                    'if [ -s next_version.txt ]; then echo "replace version placeholders"; cat next_version.txt; exit 1; fi',
+                ],
+            },
+        ],
+        "when": [
+            event["tag"],
+        ],
+    }]
+
 def dockerRelease(ctx, repo, build_type):
     build_args = {
         "REVISION": "%s" % ctx.build.commit,
@@ -2230,7 +2252,7 @@ def genDocsPr(ctx):
                     "MY_TARGET_BRANCH": "${CI_COMMIT_BRANCH##stable-}",
                 },
                 "commands": [
-                    'export DOC_GIT_TARGET_FOLDER="$$(if [ \"$$MY_TARGET_BRANCH\" = \"main\" ]; then echo \"tmpdocs/docs/dev/_static/env-vars/\"; else echo \"tmpdocs/versioned_docs/version-$${MY_TARGET_BRANCH}/dev/_static/env-vars/\"; fi)"',
+                    'export DOC_GIT_TARGET_FOLDER="$$(if [ \"$$MY_TARGET_BRANCH\" = \"main\" ]; then echo \"tmpdocs/docs/_static/env-vars/\"; else echo \"tmpdocs/versioned_docs/version-$${MY_TARGET_BRANCH}/_static/env-vars/\"; fi)"',
                     'echo "$${CI_SSH_KEY}" > /root/id_rsa && chmod 600 /root/id_rsa',
                     'git config --global user.email "devops@opencloud.eu"',
                     'git config --global user.name "openclouders"',
@@ -2255,8 +2277,8 @@ def genDocsPr(ctx):
             },
             {
                 "event": "cron",
-                "branch": "[main]",
-                "cron": "nightly *",
+                "branch": "main",
+                "cron": "nightly*",
             },
         ],
     }]
