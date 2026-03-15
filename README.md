@@ -1,8 +1,22 @@
 ![OpenCloud logo](https://raw.githubusercontent.com/opencloud-eu/opencloud/refs/heads/main/opencloud_logo.png)
 
+# OpenCloud with HEIC/HEIF and more
+
+OpenCloud has everything I need... except HEIC/HEIF thumbnails?! And that is why this fork of OpenCloud adds thumbnailing support for extra formats such as HEIC/HEIV/AVIF/JPEGXL. It is intended as a drop-in replacement for the official docker image, while allowing to revert back to the original at any time.
+
+Changes are made on top of the official images to the following components:
+- `thumbnails` service. To add handling for extra formats mime types.
+- `reva` is patched with updated mime types.
+- Bundled web assets are patched to register the extra formats mime types to `web-app-preview` app.
+
+Understandably, OpenCloud has concerns shipping HEIC support officially, due to patents around the underlying codecs and consequently `libheif`. Until they have found a way to get around this limitation i.e. by letting us run our own thumbnailing service easily via configs (without the need for a hard fork), I will be publishing the docker images here on [GH packages](https://github.com/Cassolette/opencloud/pkgs/container/opencloud) which is meant for my personal use.
+
+No guarantees will be made when you use this forked image. Upstream syncing is done manually for now and is on best effort basis. You can also maintain this fork fairly easily yourself by rebasing, as the patchsets are pretty small.
+
 [![status-badge](https://ci.opencloud.rocks/api/badges/3/status.svg)](https://ci.opencloud.rocks/repos/3)
  [![Matrix](https://img.shields.io/matrix/opencloud%3Amatrix.org?logo=matrix)](https://app.element.io/#/room/#opencloud:matrix.org)
  [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
 
 # Server Backend
 
