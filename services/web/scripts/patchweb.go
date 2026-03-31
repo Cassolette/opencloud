@@ -7,13 +7,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 )
 
 var extraMimes = [][]byte{
-	[]byte(`"image/jxl"`),
-	[]byte(`"image/heic"`),
-	[]byte(`"image/heif"`),
-	[]byte(`"image/avif"`),
+	[]byte("image/jxl"),
+	[]byte("image/heic"),
+	[]byte("image/heif"),
+	[]byte("image/avif"),
 }
 
 func main() {
@@ -52,7 +53,10 @@ func patchFile(path string) {
 	if err != nil {
 		fatal("read err %s", err)
 	}
-	out, changed := patch(data)
+	out, changed, err := patch(data)
+	if err != nil {
+		fatal("patch err %s", err)
+	}
 	if changed {
 		os.WriteFile(path, out, 0644)
 		fmt.Println("patched", path)
@@ -73,7 +77,10 @@ func patchGzip(path string) {
 	data, _ := io.ReadAll(r)
 	r.Close()
 
-	out, changed := patch(data)
+	out, changed, err := patch(data)
+	if err != nil {
+		fatal("patch err %s", err)
+	}
 	if changed {
 		var buf bytes.Buffer
 		w := gzip.NewWriter(&buf)
@@ -86,37 +93,56 @@ func patchGzip(path string) {
 	}
 }
 
-func patch(data []byte) ([]byte, bool) {
-	anchor := []byte(`"image/jpeg"`)
-	idx := bytes.Index(data, anchor)
-	if idx < 0 {
-		return data, false
-	}
+var mimeArrayRegex = regexp.MustCompile(
+	`\[[` + "`" + `"'][a-zA-Z0-9"'\x60/\-+.,\s]*[` + "`" + `"']\]`,
+)
+var mimeArrayAnchor = []byte("image/jpeg")
 
-	// find start of the array by scanning backwards for [
-	start := bytes.LastIndexByte(data[:idx], '[')
+func findMimeArray(data []byte) (start int, end int, quoteUsed byte, err error) {
+	allMatches := mimeArrayRegex.FindAllIndex(data, -1)
+
+	start, end = -1, -1
+	for _, loc := range allMatches {
+		chunk := data[loc[0]+1 : loc[1]-1]
+		if bytes.Contains(chunk, mimeArrayAnchor) {
+			start, end = loc[0]+1, loc[1]-1
+			break
+		}
+	}
 	if start < 0 {
-		return data, false
+		return -1, -1, 0, fmt.Errorf("could not find anchor")
 	}
 
-	// find end of the array by scanning forward for ]
-	endRel := bytes.IndexByte(data[idx:], ']')
-	if endRel < 0 {
-		return data, false
+	// determine quote style from first quote char found in array
+	quoteUsed = byte('"')
+	for _, b := range data[start:end] {
+		if b == '"' || b == '\'' || b == '`' {
+			quoteUsed = b
+			break
+		}
 	}
-	end := idx + endRel
 
-	array := data[start : end+1]
+	return
+}
+
+func patch(data []byte) (patched []byte, changed bool, err error) {
+	start, end, quoteUsed, err := findMimeArray(data)
+	if err != nil {
+		fatal("match err %s", err)
+	}
+
+	array := data[start:end]
 
 	var mimesToAdd [][]byte
 	for _, m := range extraMimes {
+		formatted := append([]byte{quoteUsed}, append(m, quoteUsed)...)
 		// strip duplicates
-		if !bytes.Contains(array, m) {
-			mimesToAdd = append(mimesToAdd, m)
+		if !bytes.Contains(array, formatted) {
+			mimesToAdd = append(mimesToAdd, formatted)
 		}
 	}
 	if len(mimesToAdd) == 0 {
-		return data, false
+		return data, false, nil
 	}
 
 	sep := []byte{','}
@@ -129,7 +155,7 @@ func patch(data []byte) ([]byte, bool) {
 	buf.Write(payloadToInject)
 	buf.Write(data[end:])
 
-	return buf.Bytes(), true
+	return buf.Bytes(), true, nil
 }
 
 func fatal(format string, v ...interface{}) {
