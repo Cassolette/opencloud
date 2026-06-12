@@ -142,7 +142,7 @@ jobs:
             -f opencloud/docker/Dockerfile.multiarch -t opencloudeu/opencloud:dev \
             --build-arg EDITION=rolling \
             ${BUILD_ARG_VERSION} \
-            ..
+            .
 
       - name: Push amd64 image to GHCR
         env:
@@ -205,7 +205,7 @@ jobs:
             -f opencloud/docker/Dockerfile.multiarch -t opencloudeu/opencloud:dev \
             --build-arg EDITION=rolling \
             ${BUILD_ARG_VERSION} \
-            ..
+            .
 
       - name: Push arm64 image to GHCR
         env:
